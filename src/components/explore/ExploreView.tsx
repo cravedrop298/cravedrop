@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../../context/DataContext';
+import { useAuth } from '../../context/AuthContext';
 import { useTranslation } from '../../i18n';
 import { FoodPost, Product, Restaurant } from '../../types';
 import { Search, Flame, Clock, MapPin, Store, Sparkles, Star } from 'lucide-react';
 import { isPostExpired } from '../../services/expiryService';
 import { ExpiryCountdown } from '../common/ExpiryCountdown';
+import { PAKISTAN_CITIES } from '../../utils/userUtils';
 
 interface ExploreViewProps {
   onOpenOrderModal: (post: FoodPost) => void;
@@ -28,22 +30,36 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
   onSelectProduct,
   onSelectRestaurant,
 }) => {
+  const { user } = useAuth();
   const { restaurants, products, posts } = useData();
   const { t } = useTranslation();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
 
-  // Search filter
+  const userCity = (user?.city || user?.location?.city || 'Lahore').trim().toLowerCase();
+
+  // Search filter with smart city prioritization
   const searchResults = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
 
-    const matchedRestaurants = restaurants.filter(
-      (r) =>
-        r.name.toLowerCase().includes(q) ||
-        r.category.toLowerCase().includes(q) ||
-        r.cuisine.some((c) => c.toLowerCase().includes(q))
-    );
+    // Check if search query explicitly specifies a city (e.g. "Karachi Biryani")
+    const explicitCityMatch = PAKISTAN_CITIES.find(c => q.includes(c.toLowerCase()));
+    const targetCity = explicitCityMatch ? explicitCityMatch.toLowerCase() : userCity;
+
+    const matchedRestaurants = restaurants
+      .filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.category.toLowerCase().includes(q) ||
+          r.city.toLowerCase().includes(q) ||
+          r.cuisine.some((c) => c.toLowerCase().includes(q))
+      )
+      .sort((a, b) => {
+        const matchA = a.city.toLowerCase() === targetCity ? 1 : 0;
+        const matchB = b.city.toLowerCase() === targetCity ? 1 : 0;
+        return matchB - matchA;
+      });
 
     const matchedProducts = products.filter(
       (p) =>
@@ -52,21 +68,32 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
         p.category.toLowerCase().includes(q)
     );
 
-    const matchedPosts = posts.filter(
-      (post) =>
-        !isPostExpired(post.expires_at) &&
-        (post.product_name.toLowerCase().includes(q) ||
-          post.caption.toLowerCase().includes(q) ||
-          post.restaurant_name.toLowerCase().includes(q) ||
-          post.tags.some((tag) => tag.toLowerCase().includes(q)))
-    );
+    const matchedPosts = posts
+      .filter(
+        (post) =>
+          !isPostExpired(post.expires_at) &&
+          (post.product_name.toLowerCase().includes(q) ||
+            post.caption.toLowerCase().includes(q) ||
+            post.restaurant_name.toLowerCase().includes(q) ||
+            post.tags.some((tag) => tag.toLowerCase().includes(q)))
+      )
+      .sort((a, b) => {
+        const rA = restaurants.find(r => r.id === a.restaurant_id);
+        const rB = restaurants.find(r => r.id === b.restaurant_id);
+        const cityA = (a.city || rA?.city || '').toLowerCase();
+        const cityB = (b.city || rB?.city || '').toLowerCase();
+        const matchA = cityA === targetCity ? 1 : 0;
+        const matchB = cityB === targetCity ? 1 : 0;
+        return matchB - matchA;
+      });
 
     return {
       restaurants: matchedRestaurants,
       products: matchedProducts,
       posts: matchedPosts,
+      targetCityName: explicitCityMatch || user?.city || 'Lahore',
     };
-  }, [searchQuery, restaurants, products, posts]);
+  }, [searchQuery, restaurants, products, posts, userCity, user?.city]);
 
   // Expiring soon drops
   const expiringSoonDrops = useMemo(() => {
@@ -194,7 +221,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                         {post.product_name}
                       </h4>
                       <span style={{ fontSize: '12.5px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                        ${post.product_price.toFixed(2)}
+                        Rs. {post.product_price.toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -233,7 +260,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                     <div style={{ flex: 1 }}>
                       <h4 style={{ fontSize: '13.5px', fontWeight: 700 }}>{prod.name}</h4>
                       <span style={{ fontSize: '12.5px', color: 'var(--accent-coral)', fontWeight: 800 }}>
-                        ${prod.price.toFixed(2)}
+                        Rs. {prod.price.toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -336,7 +363,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                       </h4>
                       <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{post.restaurant_name}</p>
                       <span style={{ fontSize: '12.5px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                        ${post.product_price.toFixed(2)}
+                        Rs. {post.product_price.toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -350,12 +377,22 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Store size={16} color="var(--accent-coral)" />
-                <h3 style={{ fontSize: '15px', fontWeight: 800 }}>Top Rated Kitchens</h3>
+                <h3 style={{ fontSize: '15px', fontWeight: 800 }}>
+                  Top Rated Kitchens in {user?.city || 'Lahore'}
+                </h3>
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-              {restaurants.slice(0, 4).map((rest) => (
+              {restaurants
+                .slice()
+                .sort((a, b) => {
+                  const matchA = a.city.toLowerCase() === userCity ? 1 : 0;
+                  const matchB = b.city.toLowerCase() === userCity ? 1 : 0;
+                  return matchB - matchA;
+                })
+                .slice(0, 4)
+                .map((rest) => (
                 <div
                   key={rest.id}
                   onClick={() => onSelectRestaurant(rest.id)}
@@ -427,7 +464,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                     </p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px' }}>
                       <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                        ${prod.price.toFixed(2)}
+                        Rs. {prod.price.toFixed(2)}
                       </span>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                         ~{prod.prep_time_mins}m prep

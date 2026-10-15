@@ -2,14 +2,96 @@
 
 export type UserRole = 'customer' | 'restaurant' | 'admin';
 
+export interface UserAddress {
+  id: string;
+  user_id?: string;
+  label: 'Home' | 'Work' | 'Other' | string;
+  recipient_name: string;
+  phone_number: string; // Normalized +923XXXXXXXXX
+  country_code: string; // '+92'
+  city_id: string; // Normalized city slug e.g. 'lahore', 'karachi'
+  city_name: string; // City display name e.g. 'Lahore'
+  area: string; // Area / Sector / Locality
+  house_number: string; // House / Flat / Building Number
+  street: string; // Street / Road Number
+  block_or_phase?: string; // Block / Phase
+  landmark?: string; // Nearby landmark
+  delivery_instructions?: string; // Gate code, instructions
+  latitude?: number | null;
+  longitude?: number | null;
+  is_default: boolean;
+  created_at?: string;
+  updated_at?: string;
+
+  // Backward-compatible aliases
+  house_no: string;
+  city: string;
+  phone?: string;
+  delivery_notes?: string;
+  lat?: number;
+  lng?: number;
+}
+
+export interface DeliveryAddressSnapshot {
+  address_id?: string;
+  label: string;
+  recipient_name: string;
+  phone_number: string;
+  country_code: string;
+  house_number: string;
+  street: string;
+  block_or_phase?: string;
+  area: string;
+  city_id: string;
+  city_name: string;
+  landmark?: string;
+  delivery_instructions?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  formatted_address: string;
+}
+
+export interface UserReview {
+  id: string;
+  order_id: string;
+  restaurant_id: string;
+  restaurant_name: string;
+  product_name: string;
+  rating: number; // 1-5 stars
+  comment: string;
+  created_at: string;
+  dish_image?: string;
+  reviewer_id?: string;
+  reviewed_user_id?: string;
+}
+
+export interface CityOption {
+  id: string;
+  name: string;
+  province?: string;
+  country: string;
+  lat: number;
+  lng: number;
+  is_active?: boolean;
+}
+
 export interface UserProfile {
   id: string;
+  auth_user_id?: string;
   email: string;
   name: string;
+  full_name?: string;
   username: string;
+  bio?: string;
+  city?: string;
+  city_id?: string;
   avatar_url: string;
   role: UserRole;
   phone?: string;
+  onboarding_completed: boolean;
+  interests?: string[];
+  taste_preferences?: string[];
+  addresses?: UserAddress[];
   location?: {
     address: string;
     city: string;
@@ -18,8 +100,28 @@ export interface UserProfile {
   };
   restaurant_id?: string; // If role is restaurant
   saved_post_ids: string[];
+  name_changed_at?: string;
+  username_changed_at?: string;
+  city_changed_at?: string;
   created_at: string;
+  updated_at?: string;
 }
+
+export type AuthScreenView =
+  | 'welcome'
+  | 'signin'
+  | 'signup'
+  | 'forgot_password'
+  | 'reset_password';
+
+export type AuthStatus =
+  | 'splash'
+  | 'loading'
+  | 'unauthenticated'
+  | 'onboarding_required'
+  | 'restaurant_setup_required'
+  | 'authenticated';
+
 
 export interface Restaurant {
   id: string;
@@ -33,6 +135,7 @@ export interface Restaurant {
   cuisine: string[];
   address: string;
   city: string;
+  city_id?: string;
   lat: number;
   lng: number;
   delivery_time_min: number; // e.g., 25-35 mins
@@ -93,6 +196,35 @@ export interface FoodPost {
   is_expired?: boolean;
   is_hidden?: boolean;
   tags: string[];
+  city?: string;
+  city_id?: string;
+  category?: string;
+}
+
+export type InteractionEventType =
+  | 'impression'
+  | 'watch'
+  | 'complete'
+  | 'rewatch'
+  | 'like'
+  | 'save'
+  | 'share'
+  | 'comment'
+  | 'follow'
+  | 'order'
+  | 'skip'
+  | 'not_interested';
+
+export interface PostInteraction {
+  id?: string;
+  user_id: string;
+  post_id: string;
+  event_type: InteractionEventType;
+  watch_duration_ms?: number;
+  completion_percentage?: number;
+  category?: string;
+  city_id?: string;
+  created_at?: string;
 }
 
 export interface PostComment {
@@ -157,26 +289,36 @@ export interface Order {
   customer_name: string;
   customer_phone: string;
   delivery_address: string;
+  delivery_address_id?: string;
+  delivery_address_snapshot?: DeliveryAddressSnapshot;
   restaurant_id: string;
   restaurant_name: string;
   items: {
     product_id: string;
     product_name: string;
     price: number;
+    original_price?: number;
     quantity: number;
     image_url?: string;
+    special_instructions?: string;
   }[];
   subtotal: number;
   delivery_fee: number;
   discount: number;
+  tax?: number;
   total: number;
   payment_method: 'cash_on_delivery';
   status: OrderStatus;
   notes?: string;
+  include_cutlery?: boolean;
+  idempotency_key?: string;
   associated_post_id?: string;
   created_at: string;
   updated_at: string;
   status_history: OrderStatusHistoryItem[];
+  rider_name?: string;
+  rider_phone?: string;
+  rider_vehicle?: string;
 }
 
 export interface NotificationItem {
@@ -239,3 +381,52 @@ export interface RestaurantAnalytics {
     revenue: number;
   }[];
 }
+
+// ── SOCIAL MESSAGING & FOLLOW SYSTEM TYPES ──
+export type MessageType = 'text' | 'shared_post' | 'shared_profile' | 'shared_order' | 'image';
+
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  sender_name: string;
+  sender_avatar: string;
+  message_type: MessageType;
+  text?: string;
+  shared_data?: {
+    post?: FoodPost;
+    restaurant?: Restaurant;
+    user?: UserProfile;
+    order?: Order;
+    image_url?: string;
+  };
+  created_at: string;
+  is_read?: boolean;
+}
+
+export interface ConversationParticipant {
+  id: string;
+  name: string;
+  avatar_url: string;
+  role: UserRole;
+  is_online?: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  participant_ids: string[];
+  participants: ConversationParticipant[];
+  last_message?: ChatMessage;
+  last_message_at: string;
+  unread_count: number;
+  is_request?: boolean;
+  created_at: string;
+}
+
+export type FollowStatus =
+  | 'none'
+  | 'following'
+  | 'follow_back'
+  | 'requested'
+  | 'mutual';
+

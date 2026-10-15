@@ -1,8 +1,10 @@
 export const en = {
   // Navigation
-  nav_home: 'Feed',
+  nav_home: 'Home',
+  nav_feed: 'Feed',
   nav_explore: 'Explore',
   nav_drop: 'Drop',
+  nav_messages: 'Messages',
   nav_orders: 'Orders',
   nav_profile: 'Profile',
   nav_analytics: 'Analytics',
@@ -10,8 +12,8 @@ export const en = {
 
   // Feed & Drops
   feed_title: 'Live Food Drops',
-  order_now: 'ORDER DROP',
-  order_disabled: 'DROP EXPIRED',
+  order_now: 'Order',
+  order_disabled: 'Expired',
   available_today: 'Available today',
   ends_in: 'Ends in',
   expired_tag: 'Expired Drop',

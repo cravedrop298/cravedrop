@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Crave Drop</string>
+    <string name="title_activity_main">Crave Drop</string>
+    <string name="package_name">com.cravedrop.app</string>
+    <string name="custom_url_scheme">com.cravedrop.app</string>
+</resources>

@@ -6,7 +6,11 @@ import { useTranslation } from '../../i18n';
 import { Plus, Minus, Trash2, ShoppingBag, ArrowRight, Store } from 'lucide-react';
 import { CheckoutModal } from './CheckoutModal';
 
-export const CartDrawer: React.FC = () => {
+interface CartDrawerProps {
+  onOpenBagPage?: () => void;
+}
+
+export const CartDrawer: React.FC<CartDrawerProps> = ({ onOpenBagPage }) => {
   const { cart, updateQuantity, removeFromCart, clearCart, isCartDrawerOpen, setIsCartDrawerOpen } = useCart();
   const { t } = useTranslation();
 
@@ -105,7 +109,7 @@ export const CartDrawer: React.FC = () => {
                         {item.product.name}
                       </h4>
                       <p style={{ fontSize: '12px', color: 'var(--accent-coral)', fontWeight: 800 }}>
-                        ${price.toFixed(2)}
+                        Rs. {price.toFixed(2)}
                       </p>
                       {item.special_instructions && (
                         <p style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
@@ -171,12 +175,12 @@ export const CartDrawer: React.FC = () => {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{t('subtotal')}</span>
-                <span style={{ fontWeight: 600 }}>${cart.subtotal.toFixed(2)}</span>
+                <span style={{ fontWeight: 600 }}>Rs. {cart.subtotal.toFixed(2)}</span>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{t('delivery_fee')}</span>
-                <span style={{ fontWeight: 600 }}>${cart.delivery_fee.toFixed(2)}</span>
+                <span style={{ fontWeight: 600 }}>Rs. {cart.delivery_fee.toFixed(2)}</span>
               </div>
 
               <div
@@ -191,7 +195,7 @@ export const CartDrawer: React.FC = () => {
                 }}
               >
                 <span>{t('total')}</span>
-                <span style={{ color: 'var(--accent-coral)' }}>${cart.total.toFixed(2)}</span>
+                <span style={{ color: 'var(--accent-coral)' }}>Rs. {cart.total.toFixed(2)}</span>
               </div>
             </div>
 
@@ -200,6 +204,34 @@ export const CartDrawer: React.FC = () => {
               <span>{t('proceed_to_checkout')}</span>
               <ArrowRight size={17} />
             </Button>
+
+            {onOpenBagPage && (
+              <button
+                onClick={() => {
+                  setIsCartDrawerOpen(false);
+                  onOpenBagPage();
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '12.5px',
+                  color: 'var(--text-secondary)',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  padding: '4px',
+                  textDecoration: 'underline',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '4px',
+                  margin: '0 auto',
+                }}
+              >
+                <span>View Full Bag Page</span>
+                <ArrowRight size={13} />
+              </button>
+            )}
           </div>
         )}
       </BottomSheet>

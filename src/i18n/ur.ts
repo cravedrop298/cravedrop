@@ -1,8 +1,10 @@
 export const ur = {
   // Navigation
-  nav_home: 'فیڈ',
+  nav_home: 'ہوم',
+  nav_feed: 'فیڈ',
   nav_explore: 'تلاش کریں',
   nav_drop: 'نیا ڈراپ',
+  nav_messages: 'پیغامات',
   nav_orders: 'آرڈرز',
   nav_profile: 'پروفائل',
   nav_analytics: 'تجزیات',

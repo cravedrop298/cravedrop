@@ -1,24 +1,29 @@
 -- ============================================================
--- CRAVEDROP PLATFORM - INITIAL RELATIONAL DATABASE SCHEMA & RLS
--- PostgreSQL / Supabase Schema Definition
+-- CRAVEDROP PLATFORM - PRODUCTION SUPABASE SCHEMA & RLS
+-- PostgreSQL / Supabase Schema Definition with Automated Triggers
 -- ============================================================
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 1. PROFILES TABLE (User Accounts)
+-- 1. PROFILES TABLE (User Accounts: Customer, Restaurant Partner, Admin)
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  auth_user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
+  full_name TEXT,
   username TEXT UNIQUE NOT NULL,
   avatar_url TEXT DEFAULT '',
   role TEXT NOT NULL DEFAULT 'customer' CHECK (role IN ('customer', 'restaurant', 'admin')),
+  onboarding_completed BOOLEAN NOT NULL DEFAULT false,
+  interests TEXT[] DEFAULT '{}',
   phone TEXT DEFAULT '',
   city TEXT DEFAULT 'Metropolis',
   lat NUMERIC(9,6),
   lng NUMERIC(9,6),
+  restaurant_id UUID,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
@@ -26,7 +31,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 -- 2. RESTAURANTS TABLE
 CREATE TABLE IF NOT EXISTS public.restaurants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  owner_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+  owner_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
   name TEXT NOT NULL,
   slug TEXT UNIQUE NOT NULL,
   logo_url TEXT NOT NULL DEFAULT '',
@@ -47,12 +52,24 @@ CREATE TABLE IF NOT EXISTS public.restaurants (
   followers_count INT NOT NULL DEFAULT 0,
   is_verified BOOLEAN NOT NULL DEFAULT false,
   is_featured BOOLEAN NOT NULL DEFAULT false,
-  is_approved BOOLEAN NOT NULL DEFAULT false,
+  is_approved BOOLEAN NOT NULL DEFAULT true,
   is_open BOOLEAN NOT NULL DEFAULT true,
   opening_hours TEXT NOT NULL DEFAULT '11:00 AM - 11:00 PM',
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Foreign key link back from profiles to restaurants
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fk_profile_restaurant'
+  ) THEN
+    ALTER TABLE public.profiles
+    ADD CONSTRAINT fk_profile_restaurant
+    FOREIGN KEY (restaurant_id) REFERENCES public.restaurants(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- 3. CATEGORIES TABLE
 CREATE TABLE IF NOT EXISTS public.categories (
@@ -202,23 +219,55 @@ CREATE TABLE IF NOT EXISTS public.reports (
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 15. INDEXES FOR HIGH-PERFORMANCE FEED QUERIES
-CREATE INDEX IF NOT EXISTS idx_posts_expires_at ON public.posts (expires_at);
-CREATE INDEX IF NOT EXISTS idx_posts_created_at ON public.posts (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_restaurant_id ON public.posts (restaurant_id);
-CREATE INDEX IF NOT EXISTS idx_products_restaurant ON public.products (restaurant_id);
-CREATE INDEX IF NOT EXISTS idx_orders_customer ON public.orders (customer_id);
-CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON public.orders (restaurant_id);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON public.orders (status);
+-- ============================================================
+-- AUTOMATED USER REGISTRATION TRIGGER
+-- Auto-creates a profile record in public.profiles when auth.users is created
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+  INSERT INTO public.profiles (
+    id,
+    auth_user_id,
+    email,
+    name,
+    full_name,
+    username,
+    avatar_url,
+    role,
+    onboarding_completed
+  )
+  VALUES (
+    NEW.id,
+    NEW.id,
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1)),
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1)),
+    LOWER(REGEXP_REPLACE(COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1)), '[^a-zA-Z0-9_]', '_', 'g')) || '_' || SUBSTRING(NEW.id::text, 1, 4),
+    COALESCE(NEW.raw_user_meta_data->>'avatar_url', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200'),
+    COALESCE(NEW.raw_user_meta_data->>'role', 'customer'),
+    COALESCE((NEW.raw_user_meta_data->>'onboarding_completed')::boolean, false)
+  )
+  ON CONFLICT (id) DO UPDATE
+  SET
+    email = EXCLUDED.email,
+    updated_at = timezone('utc'::text, now());
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
 
 -- ============================================================
--- AUTOMATIC EXPIRY FUNCTION & CRON HOOK
--- Server-side scheduled cleanup process
+-- AUTOMATIC EXPIRY FUNCTION FOR FOOD DROPS
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.check_expired_food_posts()
 RETURNS void AS $$
 BEGIN
-  -- Set is_expired = true for any drop past its expiration time
   UPDATE public.posts
   SET is_expired = true
   WHERE expires_at <= timezone('utc'::text, now()) AND is_expired = false;
@@ -227,10 +276,8 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
--- Strict multi-tenant security
 -- ============================================================
 
--- Enable RLS on all tables
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.restaurants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
@@ -245,33 +292,76 @@ ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Public read, self-write
-CREATE POLICY "Public profiles can be viewed by all" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Profiles are viewable by everyone" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can insert their own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
 CREATE POLICY "Users can update their own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
--- Restaurants: Public read for approved, owners can manage
-CREATE POLICY "Approved restaurants are viewable by everyone" ON public.restaurants FOR SELECT USING (is_approved = true OR auth.uid() = owner_id);
+-- Restaurants: Public read, owner manage
+CREATE POLICY "Restaurants are viewable by everyone" ON public.restaurants FOR SELECT USING (true);
+CREATE POLICY "Owners can insert restaurant" ON public.restaurants FOR INSERT WITH CHECK (auth.uid() = owner_id);
 CREATE POLICY "Owners can update their restaurant" ON public.restaurants FOR UPDATE USING (auth.uid() = owner_id);
 
--- Products: Viewable by everyone, only restaurant owners can insert/update
+-- Products: Public read, restaurant owner manage
 CREATE POLICY "Public can view active products" ON public.products FOR SELECT USING (true);
-CREATE POLICY "Restaurant owners can manage their products" ON public.products FOR ALL USING (
+CREATE POLICY "Restaurant owners can manage products" ON public.products FOR ALL USING (
   EXISTS (SELECT 1 FROM public.restaurants WHERE id = products.restaurant_id AND owner_id = auth.uid())
 );
 
--- Posts: Active posts viewable by everyone; expired viewable only by ID (direct link); owners can insert/update
-CREATE POLICY "Public can view active non-hidden drops" ON public.posts FOR SELECT USING (
-  is_hidden = false
-);
+-- Posts: Public view non-hidden, restaurant owners create/manage
+CREATE POLICY "Public can view active drops" ON public.posts FOR SELECT USING (is_hidden = false);
 CREATE POLICY "Restaurant owners can create posts" ON public.posts FOR INSERT WITH CHECK (
   EXISTS (SELECT 1 FROM public.restaurants WHERE id = posts.restaurant_id AND owner_id = auth.uid())
 );
+CREATE POLICY "Restaurant owners can update posts" ON public.posts FOR UPDATE USING (
+  EXISTS (SELECT 1 FROM public.restaurants WHERE id = posts.restaurant_id AND owner_id = auth.uid())
+);
 
--- Orders: Customers can only view their own orders; Restaurants can only view orders placed to them
+-- Likes, Comments, Saves, Follows: Self-managed
+CREATE POLICY "Public view likes" ON public.post_likes FOR SELECT USING (true);
+CREATE POLICY "Users toggle own likes" ON public.post_likes FOR ALL USING (auth.uid() = user_id);
+
+CREATE POLICY "Public view comments" ON public.post_comments FOR SELECT USING (true);
+CREATE POLICY "Users post comments" ON public.post_comments FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users delete own comments" ON public.post_comments FOR DELETE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users view own follows" ON public.restaurant_follows FOR SELECT USING (true);
+CREATE POLICY "Users toggle own follows" ON public.restaurant_follows FOR ALL USING (auth.uid() = user_id);
+
+CREATE POLICY "Users view own saved drops" ON public.saved_posts FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users toggle saved drops" ON public.saved_posts FOR ALL USING (auth.uid() = user_id);
+
+-- Orders: Customer can view/place, Restaurant owner can view/update
 CREATE POLICY "Customers view own orders" ON public.orders FOR SELECT USING (auth.uid() = customer_id);
-CREATE POLICY "Restaurants view their orders" ON public.orders FOR SELECT USING (
+CREATE POLICY "Restaurants view orders" ON public.orders FOR SELECT USING (
   EXISTS (SELECT 1 FROM public.restaurants WHERE id = orders.restaurant_id AND owner_id = auth.uid())
 );
 CREATE POLICY "Customers can place orders" ON public.orders FOR INSERT WITH CHECK (auth.uid() = customer_id);
-CREATE POLICY "Restaurants can update order status" ON public.orders FOR UPDATE USING (
+CREATE POLICY "Restaurants update orders" ON public.orders FOR UPDATE USING (
   EXISTS (SELECT 1 FROM public.restaurants WHERE id = orders.restaurant_id AND owner_id = auth.uid())
 );
+
+CREATE POLICY "Order items viewable with order access" ON public.order_items FOR SELECT USING (
+  EXISTS (SELECT 1 FROM public.orders WHERE id = order_items.order_id AND (customer_id = auth.uid() OR EXISTS (SELECT 1 FROM public.restaurants WHERE id = orders.restaurant_id AND owner_id = auth.uid())))
+);
+CREATE POLICY "Customers insert order items" ON public.order_items FOR INSERT WITH CHECK (
+  EXISTS (SELECT 1 FROM public.orders WHERE id = order_items.order_id AND customer_id = auth.uid())
+);
+
+-- Notifications
+CREATE POLICY "Users view own notifications" ON public.notifications FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users update own notifications" ON public.notifications FOR UPDATE USING (auth.uid() = user_id);
+
+-- Reports
+CREATE POLICY "Users submit reports" ON public.reports FOR INSERT WITH CHECK (auth.uid() = reporter_id);
+CREATE POLICY "Admins view and manage reports" ON public.reports FOR ALL USING (
+  EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_posts_expires_at ON public.posts (expires_at);
+CREATE INDEX IF NOT EXISTS idx_posts_created_at ON public.posts (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_restaurant_id ON public.posts (restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_products_restaurant ON public.products (restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON public.orders (customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON public.orders (restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON public.orders (status);

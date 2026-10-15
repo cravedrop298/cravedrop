@@ -13,6 +13,7 @@ export interface BrandConfig {
     primaryText: string;
     accentText: string;
     emoji: string;
+    imageUrl: string;
   };
   colors: {
     background: string;
@@ -28,17 +29,18 @@ export interface BrandConfig {
 }
 
 export const BRAND: BrandConfig = {
-  name: 'CraveDrop',
+  name: 'Crave Drop',
   tagline: 'Discover Hot Food Drops & Crave-Worthy Specials',
   shortDescription: 'Social food discovery platform where restaurants drop limited-time specials and foodies order directly from the feed.',
   supportEmail: 'hello@cravedrop.food',
-  currencySymbol: '$',
-  currencyCode: 'USD',
-  defaultDeliveryFee: 2.99,
+  currencySymbol: 'Rs. ',
+  currencyCode: 'PKR',
+  defaultDeliveryFee: 150,
   logo: {
     primaryText: 'Crave',
     accentText: 'Drop',
     emoji: '🔥',
+    imageUrl: '/logo.jpg',
   },
   colors: {
     background: '#FAF7F2',     // Soft warm cream

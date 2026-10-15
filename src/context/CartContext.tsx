@@ -61,7 +61,15 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return sum + price * item.quantity;
     }, 0);
 
+    const discount = items.reduce((sum, item) => {
+      if (item.product.discount_price !== undefined && item.product.discount_price < item.product.price) {
+        return sum + (item.product.price - item.product.discount_price) * item.quantity;
+      }
+      return sum;
+    }, 0);
+
     const roundedSubtotal = Number(subtotal.toFixed(2));
+    const roundedDiscount = Number(discount.toFixed(2));
     const total = Number((roundedSubtotal + deliveryFee).toFixed(2));
 
     return {
@@ -70,7 +78,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       items,
       subtotal: roundedSubtotal,
       delivery_fee: deliveryFee,
-      discount: 0,
+      discount: roundedDiscount,
       total,
     };
   };

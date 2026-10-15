@@ -4,6 +4,7 @@ import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { useTranslation } from '../../i18n';
 import { isPostExpired } from '../../services/expiryService';
+import { interactionTracker } from '../../services/interactionTrackingService';
 import { ExpiryCountdown } from '../common/ExpiryCountdown';
 import {
   Heart,
@@ -17,6 +18,8 @@ import {
   ShoppingBag,
   AlertCircle,
   Sparkles,
+  MoreVertical,
+  EyeOff,
 } from 'lucide-react';
 
 interface FoodPostCardProps {
@@ -26,6 +29,7 @@ interface FoodPostCardProps {
   onOpenComments: (post: FoodPost) => void;
   onOpenShare: (post: FoodPost) => void;
   onSelectRestaurant: (restaurantId: string) => void;
+  onDismissPost?: (postId: string) => void;
   isFeedActive?: boolean;
 }
 
@@ -36,8 +40,10 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
   onOpenComments,
   onOpenShare,
   onSelectRestaurant,
+  onDismissPost,
   isFeedActive = true,
 }) => {
+  const { user } = useAuth();
   const { userLikes, userSaves, userFollows, toggleLike, toggleSave, toggleFollow, incrementPostViews } = useData();
   const { t } = useTranslation();
 
@@ -51,16 +57,48 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
   const [isMuted, setIsMuted] = useState(true);
   const [videoProgress, setVideoProgress] = useState(0);
   const [showHeartAnimation, setShowHeartAnimation] = useState(false);
+  const [isCaptionExpanded, setIsCaptionExpanded] = useState(false);
+  const [showOptionsDropdown, setShowOptionsDropdown] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
 
-  // Increment views once when card enters
+  // Playback tracking refs
+  const accumulatedWatchMs = useRef<number>(0);
+  const hasCompletedRef = useRef<boolean>(false);
+  const lastTimeRef = useRef<number>(0);
+  const postCategory = post.category || restaurant?.category || '';
+  const postCityId = post.city_id || restaurant?.city_id || '';
+
+  // 1. Impression tracking
   useEffect(() => {
     incrementPostViews(post.id);
-  }, [post.id]);
+    if (user?.id) {
+      interactionTracker.trackImpression(user.id, post.id, postCategory, postCityId);
+    }
+  }, [post.id, user?.id]);
+
+  // 2. Playback tracking and skip detection on unmount / navigation
+  useEffect(() => {
+    return () => {
+      if (user?.id && post.media_type === 'video') {
+        const totalMs = accumulatedWatchMs.current;
+        const durationSec = post.duration_seconds || 15;
+        const completionPct = Math.min(100, (totalMs / 1000 / durationSec) * 100);
+
+        if (totalMs < 2500 && completionPct < 20) {
+          // Negative signal: Quick skip
+          interactionTracker.trackSkip(user.id, post.id, totalMs, postCategory, postCityId);
+        } else if (totalMs >= 1000) {
+          // Positive signal: Engaged watch
+          interactionTracker.trackWatch(user.id, post.id, totalMs, completionPct, postCategory, postCityId);
+        }
+      }
+    };
+  }, [post.id, user?.id, post.media_type, post.duration_seconds]);
 
   // Autoplay video when appropriate with muted default
   useEffect(() => {
     if (post.media_type === 'video' && videoRef.current) {
-      if (isFeedActive && !expired) {
+      if (isFeedActive && !expired && !isDismissed) {
         videoRef.current
           .play()
           .then(() => setIsPlaying(true))
@@ -70,7 +108,7 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
         setIsPlaying(false);
       }
     }
-  }, [isFeedActive, post.media_type, expired]);
+  }, [isFeedActive, post.media_type, expired, isDismissed]);
 
   const togglePlayPause = () => {
     if (!videoRef.current) return;
@@ -93,6 +131,9 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
   const handleDoubleTap = () => {
     if (!isLiked) {
       toggleLike(post.id);
+      if (user?.id) {
+        interactionTracker.trackLike(user.id, post.id, postCategory, postCityId);
+      }
     }
     setShowHeartAnimation(true);
     setTimeout(() => setShowHeartAnimation(false), 800);
@@ -100,10 +141,46 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      const prog = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+      const vid = videoRef.current;
+      const current = vid.currentTime;
+      const prog = (current / vid.duration) * 100;
       setVideoProgress(prog || 0);
+
+      // Check if looped (rewatch signal)
+      if (current < lastTimeRef.current && lastTimeRef.current > 0.8) {
+        if (user?.id) {
+          interactionTracker.trackRewatch(user.id, post.id, postCategory, postCityId);
+        }
+      }
+
+      // Check if completed (>= 90%)
+      if (prog >= 90 && !hasCompletedRef.current) {
+        hasCompletedRef.current = true;
+        if (user?.id) {
+          interactionTracker.trackComplete(user.id, post.id, postCategory, postCityId);
+        }
+      }
+
+      lastTimeRef.current = current;
+      accumulatedWatchMs.current += 250;
     }
   };
+
+  const handleNotInterested = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowOptionsDropdown(false);
+    setIsDismissed(true);
+    if (user?.id) {
+      interactionTracker.trackNotInterested(user.id, post.id, postCategory, postCityId);
+    }
+    if (onDismissPost) {
+      onDismissPost(post.id);
+    }
+  };
+
+  if (isDismissed) {
+    return null;
+  }
 
   return (
     <article
@@ -145,15 +222,10 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
             }}
           />
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <h3 style={{ fontSize: '14.5px', fontWeight: 800, color: 'var(--text-primary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'nowrap' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.2 }}>
                 {post.restaurant_name}
               </h3>
-              {post.restaurant_verified && (
-                <span className="badge-verified" title="Verified Kitchen">
-                  ✓
-                </span>
-              )}
             </div>
             <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
               {restaurant?.category || 'Specialty Kitchen'} · {restaurant?.city || 'Downtown'}
@@ -161,21 +233,88 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={() => toggleFollow(post.restaurant_id)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 'var(--radius-full)',
-            fontSize: '12px',
-            fontWeight: 700,
-            backgroundColor: isFollowing ? 'var(--bg-subtle)' : 'var(--bg-butter)',
-            color: isFollowing ? 'var(--text-secondary)' : '#B45309',
-            border: `1px solid ${isFollowing ? 'var(--border-light)' : 'var(--bg-butter-border)'}`,
-            transition: 'all 0.15s ease',
-          }}
-        >
-          {isFollowing ? t('following') : t('follow')}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}>
+          <button
+            onClick={() => {
+              toggleFollow(post.restaurant_id);
+              if (!isFollowing && user?.id) {
+                interactionTracker.trackFollow(user.id, post.restaurant_id, postCategory, postCityId);
+              }
+            }}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '12px',
+              fontWeight: 700,
+              backgroundColor: isFollowing ? 'var(--bg-subtle)' : 'var(--bg-butter)',
+              color: isFollowing ? 'var(--text-secondary)' : '#B45309',
+              border: `1px solid ${isFollowing ? 'var(--border-light)' : 'var(--bg-butter-border)'}`,
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {isFollowing ? t('following') : t('follow')}
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowOptionsDropdown(!showOptionsDropdown);
+            }}
+            title="Options"
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '5px',
+              borderRadius: '50%',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <MoreVertical size={16} />
+          </button>
+
+          {showOptionsDropdown && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '4px',
+                backgroundColor: '#FFFFFF',
+                borderRadius: '12px',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                border: '1px solid var(--border-light)',
+                zIndex: 50,
+                minWidth: '160px',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                onClick={handleNotInterested}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  color: '#DC2626',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                <EyeOff size={15} />
+                <span>Not interested</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 2. CENTER: Large Food Video or Image */}
@@ -343,74 +482,182 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
         </div>
       </div>
 
-      {/* 3. SOCIAL ACTIONS & PRIMARY ORDER CTA */}
+      {/* 3. POST DETAILS & CAPTION */}
+      <div style={{ padding: '12px 14px 8px' }}>
+        {/* Product Title & Price Row */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: '10px',
+            marginBottom: '4px',
+          }}
+        >
+          <h4 style={{ fontSize: '14.5px', fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.25, flex: 1, margin: 0 }}>
+            {post.product_name}
+          </h4>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            <span style={{ fontSize: '14px', fontWeight: 900, color: 'var(--accent-coral)' }}>
+              Rs. {post.product_price % 1 === 0 ? Math.round(post.product_price) : post.product_price.toFixed(2)}
+            </span>
+            {post.product_discount_price && (
+              <span
+                style={{
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  color: 'var(--text-muted)',
+                  textDecoration: 'line-through',
+                }}
+              >
+                Rs. {post.product_discount_price % 1 === 0 ? Math.round(post.product_discount_price) : post.product_discount_price.toFixed(2)}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Caption (1-line truncated initially, toggleable on tap) */}
+        {post.caption && (
+          <div
+            onClick={() => setIsCaptionExpanded(!isCaptionExpanded)}
+            style={{ cursor: 'pointer', marginBottom: '4px' }}
+            title={isCaptionExpanded ? 'Click to collapse' : 'Click to read full description'}
+          >
+            <p
+              style={{
+                fontSize: '12.5px',
+                color: 'var(--text-secondary)',
+                lineHeight: 1.4,
+                margin: 0,
+                display: isCaptionExpanded ? 'block' : '-webkit-box',
+                WebkitLineClamp: isCaptionExpanded ? 'unset' : 1,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {post.caption}
+            </p>
+            {post.caption.length > 45 && (
+              <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--accent-coral)', textDecoration: 'underline', marginTop: '2px', display: 'inline-block' }}>
+                {isCaptionExpanded ? 'Show less' : '... more'}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Tags */}
+        {post.tags && post.tags.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '6px' }}>
+            {post.tags.map((tag) => (
+              <span
+                key={tag}
+                style={{
+                  fontSize: '10.5px',
+                  color: 'var(--accent-coral)',
+                  fontWeight: 600,
+                  backgroundColor: 'var(--accent-coral-light)',
+                  padding: '2px 6px',
+                  borderRadius: '6px',
+                }}
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 4. BOTTOM BORDERED FOOTER: SOCIAL ACTIONS & PRIMARY ORDER CTA */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '12px 16px 8px',
+          padding: '8px 14px',
+          borderTop: '1px solid var(--border-light)',
+          backgroundColor: '#FAFAFA',
         }}
       >
         {/* Left social interaction buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {/* Like Button */}
           <button
-            onClick={() => toggleLike(post.id)}
+            onClick={() => {
+              toggleLike(post.id);
+              if (!isLiked && user?.id) {
+                interactionTracker.trackLike(user.id, post.id, postCategory, postCityId);
+              }
+            }}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
+              gap: '3px',
               color: isLiked ? 'var(--accent-coral)' : 'var(--text-secondary)',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: 700,
             }}
           >
-            <Heart size={20} fill={isLiked ? 'var(--accent-coral)' : 'none'} />
+            <Heart size={16} fill={isLiked ? 'var(--accent-coral)' : 'none'} />
             <span>{post.likes_count}</span>
           </button>
 
           {/* Comment Button */}
           <button
-            onClick={() => onOpenComments(post)}
+            onClick={() => {
+              if (user?.id) {
+                interactionTracker.trackComment(user.id, post.id, postCategory, postCityId);
+              }
+              onOpenComments(post);
+            }}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
+              gap: '3px',
               color: 'var(--text-secondary)',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: 700,
             }}
           >
-            <MessageCircle size={20} />
+            <MessageCircle size={16} />
             <span>{post.comments_count}</span>
           </button>
 
           {/* Share Button */}
           <button
-            onClick={() => onOpenShare(post)}
+            onClick={() => {
+              if (user?.id) {
+                interactionTracker.trackShare(user.id, post.id, postCategory, postCityId);
+              }
+              onOpenShare(post);
+            }}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
+              gap: '3px',
               color: 'var(--text-secondary)',
-              fontSize: '13px',
+              fontSize: '11px',
               fontWeight: 700,
             }}
           >
-            <Share2 size={19} />
+            <Share2 size={16} />
           </button>
 
           {/* Save Button */}
           <button
-            onClick={() => toggleSave(post.id)}
+            onClick={() => {
+              toggleSave(post.id);
+              if (!isSaved && user?.id) {
+                interactionTracker.trackSave(user.id, post.id, postCategory, postCityId);
+              }
+            }}
             style={{
               color: isSaved ? 'var(--accent-coral)' : 'var(--text-secondary)',
               display: 'flex',
               alignItems: 'center',
             }}
           >
-            <Bookmark size={20} fill={isSaved ? 'var(--accent-coral)' : 'none'} />
+            <Bookmark size={16} fill={isSaved ? 'var(--accent-coral)' : 'none'} />
           </button>
         </div>
 
@@ -421,73 +668,46 @@ export const FoodPostCard: React.FC<FoodPostCardProps> = ({
             style={{
               backgroundColor: '#F1F5F9',
               color: '#94A3B8',
-              padding: '8px 16px',
-              borderRadius: 'var(--radius-md)',
-              fontSize: '12.5px',
+              padding: '4px 8px',
+              borderRadius: '20px',
+              fontSize: '10.5px',
               fontWeight: 800,
               cursor: 'not-allowed',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
+              gap: '4px',
               border: '1px solid #CBD5E1',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
-            <AlertCircle size={14} />
+            <AlertCircle size={11} />
             <span>{t('order_disabled')}</span>
           </button>
         ) : (
           <button
-            onClick={() => onOpenOrderModal(post)}
+            onClick={() => {
+              if (user?.id) {
+                interactionTracker.trackOrder(user.id, post.id, postCategory, postCityId);
+              }
+              onOpenOrderModal(post);
+            }}
             className="btn-primary"
             style={{
-              padding: '9px 18px',
-              borderRadius: 'var(--radius-md)',
-              fontSize: '13px',
+              padding: '4px 9px',
+              borderRadius: '20px',
+              fontSize: '10.5px',
               fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}
           >
-            <ShoppingBag size={15} />
-            <span>{t('order_now')} · ${post.product_price.toFixed(2)}</span>
+            <ShoppingBag size={11} />
+            <span>{t('order_now')} · Rs. {post.product_price % 1 === 0 ? Math.round(post.product_price) : post.product_price.toFixed(2)}</span>
           </button>
-        )}
-      </div>
-
-      {/* 4. BOTTOM CAPTION & FOOD INFO */}
-      <div style={{ padding: '0 16px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '3px' }}>
-          <h4 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>
-            {post.product_name}
-          </h4>
-          {post.product_discount_price && (
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)', textDecoration: 'line-through' }}>
-              ${post.product_discount_price.toFixed(2)}
-            </span>
-          )}
-        </div>
-
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-          {post.caption}
-        </p>
-
-        {/* Tags */}
-        {post.tags && post.tags.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
-            {post.tags.map((tag) => (
-              <span
-                key={tag}
-                style={{
-                  fontSize: '11px',
-                  color: 'var(--accent-coral)',
-                  fontWeight: 600,
-                  backgroundColor: 'var(--accent-coral-light)',
-                  padding: '2px 7px',
-                  borderRadius: '6px',
-                }}
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
         )}
       </div>
     </article>

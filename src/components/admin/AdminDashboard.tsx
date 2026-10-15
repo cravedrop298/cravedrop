@@ -376,7 +376,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <div style={{ backgroundColor: 'white', padding: '14px', borderRadius: '16px', border: '1px solid var(--border-light)' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Platform GMV</span>
-            <p style={{ fontSize: '22px', fontWeight: 800, marginTop: '4px', color: 'var(--accent-coral)' }}>$4,892.40</p>
+            <p style={{ fontSize: '22px', fontWeight: 800, marginTop: '4px', color: 'var(--accent-coral)' }}>Rs. 4,892.40</p>
           </div>
         </div>
       )}

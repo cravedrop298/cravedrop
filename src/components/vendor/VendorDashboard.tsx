@@ -15,7 +15,7 @@ import {
   Eye,
   Plus,
   Store,
-  DollarSign,
+  Banknote,
   ChefHat,
   Bike,
   PackageCheck,
@@ -334,7 +334,7 @@ export const VendorDashboard: React.FC<VendorDashboardProps> = ({ onOpenCreateDr
                       </div>
 
                       <span style={{ fontSize: '15px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                        ${order.total.toFixed(2)}
+                        Rs. {order.total.toFixed(2)}
                       </span>
                     </div>
 
@@ -350,7 +350,7 @@ export const VendorDashboard: React.FC<VendorDashboardProps> = ({ onOpenCreateDr
                       {order.items.map((i, idx) => (
                         <div key={idx} style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <span>{i.quantity}x {i.product_name}</span>
-                          <span style={{ fontWeight: 600 }}>${(i.price * i.quantity).toFixed(2)}</span>
+                          <span style={{ fontWeight: 600 }}>Rs. {(i.price * i.quantity).toFixed(2)}</span>
                         </div>
                       ))}
                     </div>
@@ -441,7 +441,7 @@ export const VendorDashboard: React.FC<VendorDashboardProps> = ({ onOpenCreateDr
                       )}
                     </div>
                     <p style={{ fontSize: '12.5px', color: 'var(--accent-coral)', fontWeight: 800 }}>
-                      ${prod.price.toFixed(2)}
+                      Rs. {prod.price.toFixed(2)}
                     </p>
                   </div>
 
@@ -519,11 +519,11 @@ export const VendorDashboard: React.FC<VendorDashboardProps> = ({ onOpenCreateDr
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)' }}>
-                <DollarSign size={15} />
+                <Banknote size={15} />
                 <span style={{ fontSize: '12px', fontWeight: 600 }}>COD Revenue</span>
               </div>
               <p style={{ fontSize: '22px', fontWeight: 800, marginTop: '6px', color: 'var(--accent-coral)' }}>
-                ${analytics.revenue_today.toFixed(2)}
+                Rs. {analytics.revenue_today.toFixed(2)}
               </p>
               <span style={{ fontSize: '11px', color: 'var(--accent-green)', fontWeight: 700 }}>
                 +{analytics.revenue_change_pct}% this week

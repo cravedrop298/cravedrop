@@ -65,9 +65,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-html, body {
+html, body, #root {
   width: 100%;
   height: 100%;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   background-color: var(--bg-app);
   color: var(--text-primary);
   font-family: var(--font-sans);
@@ -75,11 +79,47 @@ html, body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
 }
 
 body[dir="rtl"] {
   font-family: var(--font-urdu);
+}
+
+/* Page slide-in animation */
+@keyframes slideInRight {
+  from { transform: translateX(100%); opacity: 0.6; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* Horizontal tab swipe animations */
+.tab-slide-next {
+  animation: tabSlideNext 0.22s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.tab-slide-prev {
+  animation: tabSlidePrev 0.22s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes tabSlideNext {
+  0% {
+    opacity: 0.85;
+    transform: translateX(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes tabSlidePrev {
+  0% {
+    opacity: 0.85;
+    transform: translateX(-20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 /* Smooth Scrolling */
@@ -121,15 +161,19 @@ a {
   text-decoration: none;
 }
 
-/* Device Simulator Shell (allows toggling between authentic mobile frame and full width preview) */
+/* App Container (Native edge-to-edge layout, clean without simulator bezels) */
 .simulator-layout {
-  min-height: 100vh;
+  height: 100%;
+  height: 100dvh;
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  background: #F2EDE4;
-  padding: 16px 8px;
+  background-color: var(--bg-app);
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
 }
 
 .simulator-layout.full-width {
@@ -139,82 +183,53 @@ a {
 
 .device-frame {
   width: 100%;
-  max-width: var(--app-max-width);
-  height: 94vh;
-  min-height: 700px;
-  max-height: 900px;
+  max-width: 480px;
+  height: 100%;
+  height: 100dvh;
   background-color: var(--bg-app);
-  border-radius: 44px;
-  box-shadow: 0 20px 60px rgba(50, 30, 10, 0.18), 0 0 0 10px #2D3139, 0 0 0 12px #444A56;
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
   position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 4px solid #1A1D24;
 }
 
-.simulator-layout.full-width .device-frame {
-  max-width: 100%;
-  height: 100vh;
-  min-height: 100vh;
-  max-height: none;
-  border-radius: 0;
-  box-shadow: none;
-  border: none;
-}
-
-/* Phone notch indicator */
-.phone-notch {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 110px;
-  height: 22px;
-  background-color: #1A1D24;
-  border-radius: 20px;
-  z-index: 100;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.notch-camera {
-  width: 9px;
-  height: 9px;
-  background: #0D1117;
-  border-radius: 50%;
-  margin-right: 12px;
-}
-.notch-speaker {
-  width: 38px;
-  height: 4px;
-  background: #252830;
-  border-radius: 3px;
-}
-.simulator-layout.full-width .phone-notch {
-  display: none;
+@media (max-width: 768px) {
+  .device-frame {
+    max-width: 100%;
+  }
 }
 
 /* Screen content container */
 .screen-viewport {
   flex: 1;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;
   overflow: hidden;
-  height: 100%;
   background: var(--bg-app);
 }
 
-/* Scrollable main view */
+/* Scrollable main view (only inner content scrolls, bottom nav stays fixed) */
 .main-content-scroll {
   flex: 1;
+  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(var(--bottom-nav-height) + 16px);
+  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 24px);
   position: relative;
+}
+
+/* Reels mode: let the ReelsView own its own scrolling */
+.main-content-scroll.reels-mode {
+  overflow: hidden;
+  padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
 }
 
 /* Utility Animations */
@@ -352,30 +367,41 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--accent-coral);
-  color: white;
+  color: #FFFFFF;
   font-size: 10px;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(226, 75, 54, 0.3);
 }
 
-/* Bottom Nav bar */
+/* Bottom Nav bar (Permanently pinned fixed bottom navigation) */
 .bottom-nav {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  height: var(--bottom-nav-height);
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  width: 100%;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+  height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: 8px;
+  padding-right: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-around;
-  padding: 0 8px;
-  z-index: 50;
+  z-index: 99;
 }
 
 .nav-item {
@@ -445,3 +471,117 @@ a {
   animation: shimmer 1.5s infinite;
   border-radius: var(--radius-sm);
 }
+
+/* ============================================================
+   SPLASH SCREEN ANIMATIONS
+   ============================================================ */
+@keyframes pulseDot {
+  0% { opacity: 0.35; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1.1); }
+}
+
+@keyframes splashFadeOut {
+  0% { opacity: 1; transform: scale(1); }
+  60% { opacity: 1; transform: scale(1.03); }
+  100% { opacity: 0; transform: scale(0.97); pointer-events: none; }
+}
+
+.splash-fade-out {
+  animation: splashFadeOut 0.3s cubic-bezier(0.4, 0, 1, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 0.7s linear infinite;
+}
+
+/* ============================================================
+   AUTH SCREEN TRANSITIONS
+   ============================================================ */
+@keyframes authSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+#auth-screen {
+  animation: authSlideUp 0.28s ease-out;
+}
+
+/* ============================================================
+   ONBOARDING CATEGORY HOVER STATES
+   ============================================================ */
+button:active:not(:disabled) {
+  opacity: 0.88;
+}
+
+/* ============================================================
+   FEED & SYSTEM RELOAD CIRCLING INDICATOR (Instagram / TikTok style)
+   ============================================================ */
+@keyframes dropInSpinner {
+  0% {
+    transform: translate(-50%, -24px) scale(0.65);
+    opacity: 0;
+  }
+  65% {
+    transform: translate(-50%, 6px) scale(1.06);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, 0px) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes spinCircle {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.reload-indicator-floating {
+  position: absolute;
+  top: 66px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  box-shadow: 0 4px 18px rgba(45, 25, 10, 0.16), 0 1px 4px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--border-light);
+  animation: dropInSpinner 0.28s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  pointer-events: none;
+}
+
+.reload-circle-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2.5px solid #FDEEEB;
+  border-top-color: var(--accent-coral);
+  border-right-color: var(--accent-coral);
+  border-radius: 50%;
+  animation: spinCircle 0.65s linear infinite;
+}
+
+.tab-spinner-ring {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid transparent;
+  border-top-color: var(--accent-coral);
+  border-right-color: var(--accent-coral);
+  border-radius: 50%;
+  animation: spinCircle 0.65s linear infinite;
+}
+

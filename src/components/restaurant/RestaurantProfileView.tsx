@@ -122,7 +122,6 @@ export const RestaurantProfileView: React.FC<RestaurantProfileViewProps> = ({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <h2 style={{ fontSize: '18px', fontWeight: 800 }}>{restaurant.name}</h2>
-          {restaurant.is_verified && <span className="badge-verified">✓</span>}
         </div>
 
         <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.4 }}>
@@ -238,7 +237,7 @@ export const RestaurantProfileView: React.FC<RestaurantProfileViewProps> = ({
                   </h4>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                     <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                      ${post.product_price.toFixed(2)}
+                      Rs. {post.product_price.toFixed(2)}
                     </span>
                     <span style={{ fontSize: '11px', color: 'var(--accent-coral)', fontWeight: 700 }}>
                       Order Drop →
@@ -284,7 +283,7 @@ export const RestaurantProfileView: React.FC<RestaurantProfileViewProps> = ({
                 </p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
                   <span style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                    ${prod.price.toFixed(2)}
+                    Rs. {prod.price.toFixed(2)}
                   </span>
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     · ~{prod.prep_time_mins} mins

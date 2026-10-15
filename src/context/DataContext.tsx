@@ -1,6 +1,4 @@
-// Central Data Management Context with Local Storage Persistence & Real-time Expiry Checking
-
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   FoodPost,
   Order,
@@ -11,6 +9,12 @@ import {
   NotificationItem,
   Report,
   RestaurantAnalytics,
+  UserProfile,
+  UserReview,
+  Conversation,
+  ChatMessage,
+  MessageType,
+  FollowStatus,
 } from '../types';
 import {
   INITIAL_POSTS,
@@ -21,8 +25,14 @@ import {
   INITIAL_REPORTS,
 } from '../data/seedData';
 import { isPostExpired } from '../services/expiryService';
-import { secureCreateOrder, CreateOrderParams } from '../services/orderService';
+import { secureCreateOrder, persistOrderToSupabase, CreateOrderParams } from '../services/orderService';
+import { getFollowingIds, getFollowerIds, followUser, unfollowUser, clearFollowCacheForUser } from '../services/followService';
+import { getReviewsForUser, addReviewToDatabase, clearReviewCacheForUser } from '../services/reviewService';
 import { useAuth } from './AuthContext';
+
+// Real production conversations — zero demo conversations
+export const INITIAL_CONVERSATIONS: Conversation[] = [];
+
 
 interface DataContextType {
   restaurants: Restaurant[];
@@ -33,17 +43,33 @@ interface DataContextType {
   userLikes: Set<string>;
   userSaves: Set<string>;
   userFollows: Set<string>;
+  followerIds: Set<string>;
   notifications: NotificationItem[];
   reports: Report[];
-  
+  allUsers: UserProfile[];
+  userReviews: UserReview[];
+
+  // Messaging & Social System
+  conversations: Conversation[];
+  messages: Record<string, ChatMessage[]>;
+  messageRequests: Conversation[];
+  blockedUserIds: Set<string>;
+  sendMessage: (recipientId: string, type: MessageType, text?: string, sharedData?: any) => void;
+  markConversationRead: (conversationId: string) => void;
+  blockUser: (userId: string) => void;
+  unblockUser: (userId: string) => void;
+  reportItem: (type: 'user' | 'post' | 'restaurant' | 'comment', id: string, reason: string, details?: string) => void;
+  getFollowStatus: (targetId: string) => FollowStatus;
+
   // Feed & Social Actions
   toggleLike: (postId: string) => void;
   addComment: (postId: string, content: string) => void;
   deleteComment: (commentId: string, postId: string) => void;
   toggleSave: (postId: string) => void;
-  toggleFollow: (restaurantId: string) => void;
+  toggleFollow: (targetId: string) => void;
+  addReview: (review: Omit<UserReview, 'id' | 'created_at'>) => void;
   incrementPostViews: (postId: string) => void;
-  
+
   // Vendor Actions
   createFoodPost: (data: {
     productId: string;
@@ -69,14 +95,57 @@ interface DataContextType {
   adminTakeDownPost: (postId: string) => void;
   adminModerateReport: (reportId: string, action: 'action_taken' | 'dismissed', note?: string) => void;
   markNotificationAsRead: (notificationId: string) => void;
+  markAllNotificationsAsRead: () => void;
+  addNotification: (notif: Omit<NotificationItem, 'id' | 'created_at' | 'read'>) => void;
+
+  // System Reload Action & State
+  isReloading: boolean;
+  reloadSystem: () => Promise<void>;
 }
+
+// NOTE: No demo followers/foodies or demo reviews are seeded.
+// Every account starts with completely isolated, empty social data.
+// Followers, Following, and Reviews are fetched from the real database (or
+// from per-user localStorage keys) so there is NO cross-account leakage.
+export const INITIAL_FOODIES: UserProfile[] = [];
+export const INITIAL_USER_REVIEWS: UserReview[] = [];
+
+
+
+
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
 
-  // Load from localStorage or initial seed
+  // ── Per-user key helpers ──────────────────────────────────────────────────
+  // All user-specific data MUST be scoped to user.id so switching accounts
+  // never leaks data between accounts.
+  const userReviewsKey = user?.id ? `cravedrop_reviews_${user.id}` : null;
+  const userLikesKey   = user?.id ? `cravedrop_likes_${user.id}`   : null;
+  const userSavesKey   = user?.id ? `cravedrop_saves_${user.id}`   : null;
+
+  // ── One-time purge of legacy global (non-scoped) demo keys ───────────────
+  const DEMO_PURGE_KEY = 'cravedrop_demo_purged_v4';
+  if (typeof window !== 'undefined' && !localStorage.getItem(DEMO_PURGE_KEY)) {
+    // Remove the old posts and restaurants to reload the latest city-enabled data
+    localStorage.removeItem('cravedrop_comments');
+    localStorage.removeItem('cravedrop_user_likes');
+    localStorage.removeItem('cravedrop_user_saves');
+    localStorage.removeItem('cravedrop_user_follows');
+    localStorage.removeItem('cravedrop_user_reviews');
+    localStorage.removeItem('cravedrop_all_users');
+    localStorage.removeItem('cravedrop_orders');
+    localStorage.removeItem('cravedrop_notifications');
+    localStorage.removeItem('cravedrop_reports');
+    localStorage.removeItem('cravedrop_posts');
+    localStorage.removeItem('cravedrop_restaurants');
+    localStorage.removeItem('cravedrop_products');
+    localStorage.setItem(DEMO_PURGE_KEY, 'true');
+  }
+
+  // ── Shared (non-user-specific) state ─────────────────────────────────────
   const [restaurants, setRestaurants] = useState<Restaurant[]>(() => {
     const saved = localStorage.getItem('cravedrop_restaurants');
     return saved ? JSON.parse(saved) : INITIAL_RESTAURANTS;
@@ -99,55 +168,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [comments, setComments] = useState<Record<string, PostComment[]>>(() => {
     const saved = localStorage.getItem('cravedrop_comments');
-    if (saved) return JSON.parse(saved);
-    return {
-      'post-1': [
-        {
-          id: 'comm-1',
-          post_id: 'post-1',
-          user_id: 'user-c2',
-          user_name: 'Sophia Martinez',
-          user_avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100',
-          content: 'That crust blister is incredible! Just placed an order.',
-          created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-        },
-        {
-          id: 'comm-2',
-          post_id: 'post-1',
-          user_id: 'user-c3',
-          user_name: 'Alex Rivera',
-          user_avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100',
-          content: 'Is the hot honey spicy or mild? Looks delicious!',
-          created_at: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-        }
-      ],
-      'post-2': [
-        {
-          id: 'comm-3',
-          post_id: 'post-2',
-          user_id: 'user-c4',
-          user_name: 'David Chen',
-          user_avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100',
-          content: 'Sizzle on the grill is pure music! 8 mins left, grabbing one now.',
-          created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
-        }
-      ]
-    };
-  });
-
-  const [userLikes, setUserLikes] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem('cravedrop_user_likes');
-    return saved ? new Set(JSON.parse(saved)) : new Set(['post-1']);
-  });
-
-  const [userSaves, setUserSaves] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem('cravedrop_user_saves');
-    return saved ? new Set(JSON.parse(saved)) : new Set(['post-1', 'post-3']);
-  });
-
-  const [userFollows, setUserFollows] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem('cravedrop_user_follows');
-    return saved ? new Set(JSON.parse(saved)) : new Set(['rest-1', 'rest-2']);
+    return saved ? JSON.parse(saved) : {};
   });
 
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
@@ -160,7 +181,181 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return saved ? JSON.parse(saved) : INITIAL_REPORTS;
   });
 
-  // Persistent synchronization
+  // ── Per-user state (scoped to authenticated user ID) ─────────────────────
+  // userFollows: IDs that the current user follows (keyed to authenticated user.id)
+  const [userFollows, setUserFollows] = useState<Set<string>>(() => {
+    if (!user?.id) return new Set<string>();
+    try {
+      const raw = localStorage.getItem(`cravedrop_follows_${user.id}`);
+      return raw ? new Set(JSON.parse(raw)) : new Set<string>();
+    } catch {
+      return new Set<string>();
+    }
+  });
+
+  // followerIds: IDs of users who follow the current user
+  const [followerIds, setFollowerIds] = useState<Set<string>>(() => {
+    if (!user?.id) return new Set<string>();
+    const followers = new Set<string>();
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith('cravedrop_follows_')) continue;
+        const followerId = key.replace('cravedrop_follows_', '');
+        if (followerId === user.id) continue;
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const arr = JSON.parse(raw) as string[];
+        if (arr.includes(user.id)) followers.add(followerId);
+      }
+    } catch {}
+    return followers;
+  });
+
+  // allUsers: real user profiles discovered via follows (not a shared demo list)
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+
+  // userLikes, userSaves — scoped to user.id
+  const [userLikes, setUserLikes] = useState<Set<string>>(() => {
+    if (!user?.id) return new Set<string>();
+    const key = `cravedrop_likes_${user.id}`;
+    const saved = localStorage.getItem(key);
+    return saved ? new Set(JSON.parse(saved)) : new Set<string>();
+  });
+
+  const [userSaves, setUserSaves] = useState<Set<string>>(() => {
+    if (!user?.id) return new Set<string>();
+    const key = `cravedrop_saves_${user.id}`;
+    const saved = localStorage.getItem(key);
+    return saved ? new Set(JSON.parse(saved)) : new Set<string>();
+  });
+
+  // userReviews — scoped to user.id, no demo data
+  const [userReviews, setUserReviews] = useState<UserReview[]>(() => {
+    if (!user?.id) return [];
+    const key = `cravedrop_reviews_${user.id}`;
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // conversations & messages — scoped to user.id, no demo data
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    if (!user?.id) return [];
+    const key = `cravedrop_conversations_${user.id}`;
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(() => {
+    if (!user?.id) return {};
+    const key = `cravedrop_messages_${user.id}`;
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : {};
+  });
+
+  // ── Reload user-specific state when the authenticated user changes ────────
+  // This is the critical guard against cross-account leakage.
+  const prevUserId = useRef<string | null>(null);
+  useEffect(() => {
+    const currentId = user?.id || null;
+    if (currentId === prevUserId.current) return; // same user, no reload needed
+    prevUserId.current = currentId;
+
+    if (!currentId) {
+      // User logged out — clear all per-user state
+      setUserFollows(new Set<string>());
+      setFollowerIds(new Set<string>());
+      setUserReviews([]);
+      setUserLikes(new Set<string>());
+      setUserSaves(new Set<string>());
+      setConversations([]);
+      setMessages({});
+      setAllUsers([]);
+      return;
+    }
+
+    // Load follows from followService (keyed to currentId)
+    getFollowingIds(currentId).then(setUserFollows);
+    getFollowerIds(currentId).then(setFollowerIds);
+
+    // Load per-user reviews from reviewService
+    getReviewsForUser(currentId).then(setUserReviews);
+
+    // Load per-user likes
+    const likesKey = `cravedrop_likes_${currentId}`;
+    const savedLikes = localStorage.getItem(likesKey);
+    setUserLikes(savedLikes ? new Set(JSON.parse(savedLikes)) : new Set<string>());
+
+    // Load per-user saves
+    const savesKey = `cravedrop_saves_${currentId}`;
+    const savedSaves = localStorage.getItem(savesKey);
+    setUserSaves(savedSaves ? new Set(JSON.parse(savedSaves)) : new Set<string>());
+
+    // Load per-user conversations & messages
+    const convKey = `cravedrop_conversations_${currentId}`;
+    const savedConv = localStorage.getItem(convKey);
+    setConversations(savedConv ? JSON.parse(savedConv) : []);
+
+    const msgKey = `cravedrop_messages_${currentId}`;
+    const savedMsg = localStorage.getItem(msgKey);
+    setMessages(savedMsg ? JSON.parse(savedMsg) : {});
+
+    // allUsers stays empty — we only populate it when real users are found via search / follows
+    setAllUsers([]);
+  }, [user?.id]);
+
+  const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem('cravedrop_blocked_users');
+    return saved ? new Set(JSON.parse(saved)) : new Set<string>();
+  });
+
+  const [isReloading, setIsReloading] = useState(false);
+
+  // App System Reload Logic (re-evaluates posts, countdowns, orders, and simulates network sync)
+  const reloadSystem = useCallback(async () => {
+    if (isReloading) return;
+    setIsReloading(true);
+
+    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+      try { navigator.vibrate([30, 20, 30]); } catch {}
+    }
+
+    try {
+      const savedPosts = localStorage.getItem('cravedrop_posts');
+      if (savedPosts) {
+        setPosts(JSON.parse(savedPosts));
+      } else {
+        setPosts([...INITIAL_POSTS]);
+      }
+
+      const savedRests = localStorage.getItem('cravedrop_restaurants');
+      if (savedRests) setRestaurants(JSON.parse(savedRests));
+
+      const savedProds = localStorage.getItem('cravedrop_products');
+      if (savedProds) setProducts(JSON.parse(savedProds));
+
+      const savedOrders = localStorage.getItem('cravedrop_orders');
+      if (savedOrders) setOrders(JSON.parse(savedOrders));
+
+      const savedNotifs = localStorage.getItem('cravedrop_notifications');
+      if (savedNotifs) setNotifications(JSON.parse(savedNotifs));
+
+      // Reload per-user follow data too
+      if (user?.id) {
+        const follows = await getFollowingIds(user.id);
+        setUserFollows(follows);
+        const followers = await getFollowerIds(user.id);
+        setFollowerIds(followers);
+      }
+    } catch (err) {
+      console.warn('System reload sync error:', err);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 950));
+    setIsReloading(false);
+  }, [isReloading, user?.id]);
+
+  // Persistent synchronization — shared non-user-specific data
   useEffect(() => {
     localStorage.setItem('cravedrop_restaurants', JSON.stringify(restaurants));
   }, [restaurants]);
@@ -181,17 +376,18 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('cravedrop_comments', JSON.stringify(comments));
   }, [comments]);
 
+  // Per-user persistent sync (scoped to user ID)
   useEffect(() => {
-    localStorage.setItem('cravedrop_user_likes', JSON.stringify(Array.from(userLikes)));
-  }, [userLikes]);
+    if (userLikesKey) localStorage.setItem(userLikesKey, JSON.stringify(Array.from(userLikes)));
+  }, [userLikes, userLikesKey]);
 
   useEffect(() => {
-    localStorage.setItem('cravedrop_user_saves', JSON.stringify(Array.from(userSaves)));
-  }, [userSaves]);
+    if (userSavesKey) localStorage.setItem(userSavesKey, JSON.stringify(Array.from(userSaves)));
+  }, [userSaves, userSavesKey]);
 
   useEffect(() => {
-    localStorage.setItem('cravedrop_user_follows', JSON.stringify(Array.from(userFollows)));
-  }, [userFollows]);
+    if (userReviewsKey) localStorage.setItem(userReviewsKey, JSON.stringify(userReviews));
+  }, [userReviews, userReviewsKey]);
 
   useEffect(() => {
     localStorage.setItem('cravedrop_notifications', JSON.stringify(notifications));
@@ -201,7 +397,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('cravedrop_reports', JSON.stringify(reports));
   }, [reports]);
 
+  useEffect(() => {
+    if (user?.id) {
+      localStorage.setItem(`cravedrop_conversations_${user.id}`, JSON.stringify(conversations));
+    }
+  }, [conversations, user?.id]);
+
+  useEffect(() => {
+    if (user?.id) {
+      localStorage.setItem(`cravedrop_messages_${user.id}`, JSON.stringify(messages));
+    }
+  }, [messages, user?.id]);
+
+  useEffect(() => {
+    if (user?.id) {
+      localStorage.setItem(`cravedrop_follows_${user.id}`, JSON.stringify(Array.from(userFollows)));
+    }
+  }, [userFollows, user?.id]);
+
+
+
   // Periodic Expiry Check - Updates post status when expires_at timestamp is reached
+
   useEffect(() => {
     const interval = setInterval(() => {
       setPosts((currentPosts) => {
@@ -249,7 +466,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       post_id: postId,
       user_id: user?.id || 'anon-user',
       user_name: user?.name || 'Food Explorer',
-      user_avatar: user?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+      user_avatar: user?.avatar_url || '',
       content: content.trim(),
       created_at: new Date().toISOString(),
     };
@@ -299,25 +516,46 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
-  const toggleFollow = (restaurantId: string) => {
-    const newFollows = new Set(userFollows);
-    const isFollowing = newFollows.has(restaurantId);
+  const toggleFollow = (targetId: string) => {
+    if (!user?.id || !targetId || user.id === targetId) return; // prevent self-follow
+    const isFollowing = userFollows.has(targetId);
 
+    // Optimistic UI update
+    const newFollows = new Set(userFollows);
     if (isFollowing) {
-      newFollows.delete(restaurantId);
+      newFollows.delete(targetId);
     } else {
-      newFollows.add(restaurantId);
+      newFollows.add(targetId);
     }
     setUserFollows(newFollows);
 
+    // Persist to followService (keyed to authenticated user.id)
+    if (isFollowing) {
+      unfollowUser(user.id, targetId).then(setUserFollows);
+    } else {
+      followUser(user.id, targetId).then(setUserFollows);
+    }
+
+    // Update restaurant followers_count locally
     setRestaurants((prev) =>
       prev.map((r) =>
-        r.id === restaurantId
+        r.id === targetId
           ? { ...r, followers_count: Math.max(0, r.followers_count + (isFollowing ? -1 : 1)) }
           : r
       )
     );
   };
+
+
+  const addReview = (reviewData: Omit<UserReview, 'id' | 'created_at'>) => {
+    addReviewToDatabase({
+      ...reviewData,
+      reviewer_id: user?.id,
+    }).then((created) => {
+      setUserReviews((prev) => [created, ...prev]);
+    });
+  };
+
 
   const incrementPostViews = (postId: string) => {
     setPosts((prev) =>
@@ -346,7 +584,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       restaurant_id: restaurant?.id || 'rest-1',
       restaurant_name: restaurant?.name || 'FireCrust Woodfired Pizza',
       restaurant_logo: restaurant?.logo_url || 'https://images.unsplash.com/photo-1579758630668-188c22e497b1?w=200',
-      restaurant_verified: restaurant?.is_verified ?? true,
+      restaurant_verified: restaurant?.is_verified ?? false,
       product_id: data.productId,
       product_name: product?.name || 'Special Menu Item',
       product_price: product?.discount_price ?? (product?.price || 14.99),
@@ -366,6 +604,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       orders_count: 0,
       is_expired: false,
       is_hidden: false,
+      city: restaurant?.city || user?.city || 'Lahore',
+      city_id: restaurant?.city_id || user?.city_id || 'lahore',
+      category: restaurant?.category || product?.category || 'General',
       tags: data.tags || ['#FreshDrop', '#LimitedTime'],
     };
 
@@ -374,7 +615,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Add notification
     const newNotif: NotificationItem = {
       id: `notif-${Date.now()}`,
-      user_id: user?.id || 'user-customer-1',
+      user_id: user?.id || '',
       title: `🔥 New Drop: ${restaurant?.name}`,
       message: `Just dropped "${newPost.product_name}". Grab it before it expires!`,
       type: 'drop',
@@ -402,7 +643,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
-  // Order Placement with Server-Side Validation
+  // Order Placement with Server-Side Validation, Idempotency & Snapshot Persistence
   const placeOrder = async (
     params: CreateOrderParams
   ): Promise<{ success: boolean; order?: Order; error?: string }> => {
@@ -420,31 +661,41 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const createdOrder = result.order;
-    setOrders((prev) => [createdOrder, ...prev]);
 
-    // If attached to a drop, bump post orders count
-    if (params.associatedPostId) {
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === params.associatedPostId
-            ? { ...p, orders_count: p.orders_count + 1 }
-            : p
-        )
-      );
+    // Only append to orders list and send notifications if not a duplicate idempotent replay
+    if (!result.isDuplicate) {
+      setOrders((prev) => {
+        if (prev.some((o) => o.id === createdOrder.id)) return prev;
+        return [createdOrder, ...prev];
+      });
+
+      // Persist asynchronously to Supabase if live
+      persistOrderToSupabase(createdOrder).catch(() => {});
+
+      // If attached to a drop, bump post orders count
+      if (params.associatedPostId) {
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.id === params.associatedPostId
+              ? { ...p, orders_count: p.orders_count + 1 }
+              : p
+          )
+        );
+      }
+
+      // Trigger customer notification
+      const orderNotif: NotificationItem = {
+        id: `notif-${Date.now()}`,
+        user_id: params.customerId,
+        title: 'Order Placed (Cash on Delivery) 🛍️',
+        message: `Your order #${createdOrder.id} to ${createdOrder.restaurant_name} has been sent to the kitchen.`,
+        type: 'order',
+        read: false,
+        created_at: new Date().toISOString(),
+        action_url: `/orders/${createdOrder.id}`,
+      };
+      setNotifications((prev) => [orderNotif, ...prev]);
     }
-
-    // Trigger customer notification
-    const orderNotif: NotificationItem = {
-      id: `notif-${Date.now()}`,
-      user_id: params.customerId,
-      title: 'Order Placed (Cash on Delivery) 🛍️',
-      message: `Your order #${createdOrder.id} to ${createdOrder.restaurant_name} has been sent to the kitchen.`,
-      type: 'order',
-      read: false,
-      created_at: new Date().toISOString(),
-      action_url: `/orders/${createdOrder.id}`,
-    };
-    setNotifications((prev) => [orderNotif, ...prev]);
 
     return {
       success: true,
@@ -545,6 +796,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   };
 
+  const markAllNotificationsAsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  };
+
+  const addNotification = (notif: Omit<NotificationItem, 'id' | 'created_at' | 'read'>) => {
+    const newNotif: NotificationItem = {
+      ...notif,
+      id: `notif-${Date.now()}`,
+      read: false,
+      created_at: new Date().toISOString(),
+    };
+    setNotifications((prev) => [newNotif, ...prev]);
+  };
+
   // Vendor Analytics Generator
   const getRestaurantAnalytics = (restaurantId: string): RestaurantAnalytics => {
     const restPosts = posts.filter((p) => p.restaurant_id === restaurantId);
@@ -588,6 +853,125 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   };
 
+  // Messaging System Handlers
+  const sendMessage = (recipientId: string, type: MessageType, text?: string, sharedData?: any) => {
+    if (!user?.id) return;
+    const currentUserId = user.id;
+    let targetConv = conversations.find(
+      (c) => c.participant_ids.includes(recipientId) && c.participant_ids.includes(currentUserId)
+    );
+
+    const nowIso = new Date().toISOString();
+    const newMsgId = `msg-${Date.now()}`;
+
+    const newMsg: ChatMessage = {
+      id: newMsgId,
+      conversation_id: targetConv ? targetConv.id : `conv-${Date.now()}`,
+      sender_id: currentUserId,
+      sender_name: user.name || user.full_name || 'Food Explorer',
+      sender_avatar: user.avatar_url || '',
+      message_type: type,
+      text: text || '',
+      shared_data: sharedData,
+      created_at: nowIso,
+      is_read: true,
+    };
+
+    if (targetConv) {
+      setMessages((prev) => ({
+        ...prev,
+        [targetConv!.id]: [...(prev[targetConv!.id] || []), newMsg],
+      }));
+
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === targetConv!.id
+            ? { ...c, last_message: newMsg, last_message_at: nowIso }
+            : c
+        )
+      );
+    } else {
+      const recipientUser = allUsers.find((u) => u.id === recipientId);
+      const recipientRest = restaurants.find((r) => r.id === recipientId || r.owner_id === recipientId);
+
+      const recipientName = recipientRest?.name || recipientUser?.name || 'Food Explorer';
+      const recipientAvatar = recipientRest?.logo_url || recipientUser?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150';
+      const recipientRole = recipientRest ? 'restaurant' : recipientUser?.role || 'customer';
+
+      const createdConvId = `conv-${Date.now()}`;
+      newMsg.conversation_id = createdConvId;
+
+      const newConv: Conversation = {
+        id: createdConvId,
+        participant_ids: [currentUserId, recipientId],
+        participants: [
+          { id: currentUserId, name: user?.name || 'Me', avatar_url: user?.avatar_url || '', role: user?.role || 'customer' },
+          { id: recipientId, name: recipientName, avatar_url: recipientAvatar, role: recipientRole, is_online: true },
+        ],
+        last_message: newMsg,
+        last_message_at: nowIso,
+        unread_count: 0,
+        created_at: nowIso,
+      };
+
+      setConversations((prev) => [newConv, ...prev]);
+      setMessages((prev) => ({
+        ...prev,
+        [createdConvId]: [newMsg],
+      }));
+    }
+  };
+
+  const markConversationRead = (conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, unread_count: 0 } : c))
+    );
+  };
+
+  const blockUser = (targetId: string) => {
+    const updated = new Set(blockedUserIds);
+    if (updated.has(targetId)) {
+      updated.delete(targetId);
+    } else {
+      updated.add(targetId);
+    }
+    setBlockedUserIds(updated);
+  };
+
+  const unblockUser = (targetId: string) => {
+    const updated = new Set(blockedUserIds);
+    updated.delete(targetId);
+    setBlockedUserIds(updated);
+  };
+
+  const reportItem = (type: 'user' | 'post' | 'restaurant' | 'comment', id: string, reason: string, details?: string) => {
+    const newReport: Report = {
+      id: `rep-${Date.now()}`,
+      reporter_id: user?.id || 'anon',
+      reporter_name: user?.name || user?.full_name || 'Anonymous',
+      reported_type: type as any,
+      reported_id: id,
+      reason: reason as any,
+      details: details || '',
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    setReports((prev) => [newReport, ...prev]);
+  };
+
+  const getFollowStatus = (targetId: string): FollowStatus => {
+    // iFollow: current user follows targetId
+    const iFollow = userFollows.has(targetId);
+    // followsMe: targetId follows the current user (determined from real followerIds)
+    const followsMe = followerIds.has(targetId);
+
+    if (iFollow && followsMe) return 'mutual';
+    if (iFollow) return 'following';
+    if (followsMe) return 'follow_back';
+    return 'none';
+
+  };
+
   return (
     <DataContext.Provider
       value={{
@@ -599,13 +983,27 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         userLikes,
         userSaves,
         userFollows,
+        followerIds,
         notifications,
         reports,
+        allUsers,
+        userReviews,
+        conversations,
+        messages,
+        messageRequests: [],
+        blockedUserIds,
+        sendMessage,
+        markConversationRead,
+        blockUser,
+        unblockUser,
+        reportItem,
+        getFollowStatus,
         toggleLike,
         addComment,
         deleteComment,
         toggleSave,
         toggleFollow,
+        addReview,
         incrementPostViews,
         createFoodPost,
         createProduct,
@@ -618,6 +1016,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         adminTakeDownPost,
         adminModerateReport,
         markNotificationAsRead,
+        markAllNotificationsAsRead,
+        addNotification,
+        isReloading,
+        reloadSystem,
       }}
     >
       {children}

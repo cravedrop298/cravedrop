@@ -187,7 +187,7 @@ export const CreateDropModal: React.FC<CreateDropModalProps> = ({ isOpen, onClos
             >
               {restaurantProducts.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} — ${p.price.toFixed(2)} ({p.category})
+                  {p.name} — Rs. {p.price.toFixed(2)} ({p.category})
                 </option>
               ))}
             </select>

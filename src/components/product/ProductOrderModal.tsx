@@ -13,6 +13,7 @@ interface ProductOrderModalProps {
   onClose: () => void;
   product: Product | null;
   post?: FoodPost | null;
+  onNavigateToBag?: () => void;
 }
 
 export const ProductOrderModal: React.FC<ProductOrderModalProps> = ({
@@ -20,6 +21,7 @@ export const ProductOrderModal: React.FC<ProductOrderModalProps> = ({
   onClose,
   product,
   post,
+  onNavigateToBag,
 }) => {
   const { addToCart, confirmSwitchRestaurantAndAdd, setIsCartDrawerOpen } = useCart();
   const { restaurants } = useData();
@@ -50,7 +52,11 @@ export const ProductOrderModal: React.FC<ProductOrderModalProps> = ({
     }
 
     onClose();
-    setIsCartDrawerOpen(true);
+    if (onNavigateToBag) {
+      onNavigateToBag();
+    } else {
+      setIsCartDrawerOpen(true);
+    }
   };
 
   const handleConfirmSwitch = () => {
@@ -63,7 +69,11 @@ export const ProductOrderModal: React.FC<ProductOrderModalProps> = ({
     );
     setConflictPrompt(null);
     onClose();
-    setIsCartDrawerOpen(true);
+    if (onNavigateToBag) {
+      onNavigateToBag();
+    } else {
+      setIsCartDrawerOpen(true);
+    }
   };
 
   return (
@@ -201,7 +211,7 @@ export const ProductOrderModal: React.FC<ProductOrderModalProps> = ({
               {/* Add to Bag CTA */}
               <Button variant="primary" fullWidth size="lg" onClick={handleAdd}>
                 <ShoppingBag size={17} />
-                <span>Add to Food Bag · ${itemSubtotal.toFixed(2)}</span>
+                <span>Add to Food Bag · Rs. {itemSubtotal.toFixed(2)}</span>
               </Button>
             </>
           )}

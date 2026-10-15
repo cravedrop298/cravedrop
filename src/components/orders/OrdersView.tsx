@@ -15,7 +15,9 @@ import {
   Store,
   ChevronRight,
   Star,
+  MapPin,
 } from 'lucide-react';
+
 
 export const OrdersView: React.FC = () => {
   const { orders } = useData();
@@ -28,8 +30,8 @@ export const OrdersView: React.FC = () => {
   const [reviewText, setReviewText] = useState('');
   const [reviewSubmitted, setReviewSubmitted] = useState(false);
 
-  // Filter orders for active user
-  const userOrders = orders.filter((o) => o.customer_id === user?.id || user?.id === 'user-customer-1');
+  // Filter orders strictly for the authenticated user — NO hard-coded demo accounts
+  const userOrders = orders.filter((o) => user?.id && o.customer_id === user.id);
 
   const activeOrders = userOrders.filter(
     (o) => o.status !== 'delivered' && o.status !== 'cancelled' && o.status !== 'rejected'
@@ -190,7 +192,7 @@ export const OrdersView: React.FC = () => {
                       {order.items.reduce((s, i) => s + i.quantity, 0)} items · Cash on Delivery
                     </span>
                     <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--accent-coral)' }}>
-                      ${order.total.toFixed(2)}
+                      Rs. {order.total.toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -258,7 +260,7 @@ export const OrdersView: React.FC = () => {
                     {order.items.map((i) => `${i.quantity}x ${i.product_name}`).join(', ')}
                   </p>
                   <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>
-                    ${order.total.toFixed(2)}
+                    Rs. {order.total.toFixed(2)}
                   </span>
                 </div>
 
@@ -341,6 +343,64 @@ export const OrdersView: React.FC = () => {
               </div>
             </div>
 
+
+
+            {/* Preserved Delivery Address Snapshot */}
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
+              <h5 style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <MapPin size={14} color="var(--accent-coral)" /> Delivery Address Snapshot
+              </h5>
+              <div
+                style={{
+                  backgroundColor: 'var(--bg-subtle)',
+                  padding: '10px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  fontSize: '12.5px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {selectedOrder.delivery_address_snapshot?.recipient_name || selectedOrder.customer_name}
+                  </span>
+                  {selectedOrder.delivery_address_snapshot?.label && (
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        fontWeight: 800,
+                        textTransform: 'uppercase',
+                        padding: '2px 7px',
+                        borderRadius: 'var(--radius-full)',
+                        backgroundColor: 'var(--accent-coral-soft)',
+                        color: 'var(--accent-coral)',
+                      }}
+                    >
+                      {selectedOrder.delivery_address_snapshot.label}
+                    </span>
+                  )}
+                </div>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  {selectedOrder.delivery_address_snapshot?.phone_number || selectedOrder.customer_phone}
+                </span>
+                <span style={{ color: 'var(--text-primary)', lineHeight: 1.4 }}>
+                  {selectedOrder.delivery_address_snapshot?.formatted_address || selectedOrder.delivery_address}
+                </span>
+                {selectedOrder.delivery_address_snapshot?.landmark && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
+                    Landmark: {selectedOrder.delivery_address_snapshot.landmark}
+                  </span>
+                )}
+                {(selectedOrder.notes || selectedOrder.delivery_address_snapshot?.delivery_instructions) && (
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '11.5px', fontStyle: 'italic', marginTop: '2px' }}>
+                    Note: "{selectedOrder.notes || selectedOrder.delivery_address_snapshot?.delivery_instructions}"
+                  </span>
+                )}
+              </div>
+            </div>
+
             {/* Items */}
             <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
               <h5 style={{ fontSize: '13px', fontWeight: 700, marginBottom: '8px', color: 'var(--text-secondary)' }}>
@@ -352,7 +412,7 @@ export const OrdersView: React.FC = () => {
                     <span>
                       {item.quantity}x {item.product_name}
                     </span>
-                    <span style={{ fontWeight: 600 }}>${(item.price * item.quantity).toFixed(2)}</span>
+                    <span style={{ fontWeight: 600 }}>Rs. {(item.price * item.quantity).toFixed(0)}</span>
                   </div>
                 ))}
               </div>
@@ -372,12 +432,24 @@ export const OrdersView: React.FC = () => {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Subtotal</span>
-                <span>${selectedOrder.subtotal.toFixed(2)}</span>
+                <span>Rs. {selectedOrder.subtotal.toFixed(0)}</span>
               </div>
+              {selectedOrder.discount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--accent-green)', fontWeight: 700 }}>
+                  <span>Food Drop Discount</span>
+                  <span>-Rs. {selectedOrder.discount.toFixed(0)}</span>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Delivery Fee</span>
-                <span>${selectedOrder.delivery_fee.toFixed(2)}</span>
+                <span>Rs. {selectedOrder.delivery_fee.toFixed(0)}</span>
               </div>
+              {(selectedOrder.tax ?? 0) > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Service / Tax Fee</span>
+                  <span>Rs. {(selectedOrder.tax ?? 0).toFixed(0)}</span>
+                </div>
+              )}
               <div
                 style={{
                   display: 'flex',
@@ -391,7 +463,7 @@ export const OrdersView: React.FC = () => {
                 }}
               >
                 <span>Total (Cash on Delivery)</span>
-                <span>${selectedOrder.total.toFixed(2)}</span>
+                <span>Rs. {selectedOrder.total.toFixed(0)}</span>
               </div>
             </div>
 
